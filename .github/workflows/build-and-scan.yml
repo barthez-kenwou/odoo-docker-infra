@@ -90,7 +90,7 @@ jobs:
       # --- Only now, having passed every gate above, push for real ---
       - name: Compute image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_BASE }}/${{ matrix.component }}
           tags: |
