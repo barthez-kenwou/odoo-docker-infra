@@ -4,7 +4,7 @@
 # via master process privilege separation; we additionally run the container
 # itself with a non-root UID at the Compose level — see docker-compose.base.yml).
 # =============================================================================
-FROM nginx:1.27.1-alpine3.20
+FROM nginx:1.27.3-alpine3.20
 
 LABEL org.opencontainers.image.title="odoo-devsecops-lab-nginx" \
       org.opencontainers.image.description="Hardened Nginx reverse proxy for the Odoo lab"
