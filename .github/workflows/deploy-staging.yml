@@ -58,7 +58,7 @@ jobs:
           BASE_URL=https://staging-odoo.example.com python3 tests/integration/test_health.py
 
       - name: DAST (OWASP ZAP baseline scan)
-        uses: zaproxy/action-baseline@v0.13.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: "https://staging-odoo.example.com"
           rules_file_name: "tests/security/zap-baseline.conf"
