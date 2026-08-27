@@ -1,5 +1,5 @@
 # Extra Python dependencies required ONLY by custom addons in addons/custom/.
 # Keep this pinned to exact versions (== not >=) for reproducible builds.
 # The base odoo:18.0 image already ships everything Odoo core needs.
-qrcode==7.4.2
+qrcode==8.2
 phonenumbers==8.13.42
