@@ -14,7 +14,7 @@ terraform {
     # Only initialized when var.enable_cloud_dns = true (see modules/dns).
     cloudflare = {
       source  = "cloudflare/cloudflare"
-      version = "~> 4.41.0"
+      version = "~> 5.23.0"
     }
     # Only initialized when var.enable_cloud_storage = true (see modules/object_storage).
     aws = {
