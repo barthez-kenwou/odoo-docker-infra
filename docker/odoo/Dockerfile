@@ -31,7 +31,7 @@ RUN apt-get update \
 
 # ---- Stage 2: final runtime image ----
 # Pin the exact Odoo release. Bump deliberately, never track a moving tag.
-FROM odoo:18.0
+FROM odoo:19.0
 
 LABEL org.opencontainers.image.title="odoo-devsecops-lab" \
       org.opencontainers.image.description="Hardened Odoo runtime image for the DevSecOps lab" \
