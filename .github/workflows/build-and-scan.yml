@@ -47,7 +47,7 @@ jobs:
 
       # --- Build once, load locally for scanning BEFORE it's ever pushed ---
       - name: Build (local, for pre-push scanning)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ steps.ctx.outputs.context }}
           file: ${{ steps.ctx.outputs.dockerfile }}
@@ -99,7 +99,7 @@ jobs:
 
       - name: Build & push (immutable digest)
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ steps.ctx.outputs.context }}
           file: ${{ steps.ctx.outputs.dockerfile }}
