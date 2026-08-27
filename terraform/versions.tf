@@ -24,7 +24,7 @@ terraform {
     # Only initialized when var.enable_cloud_compute = true (see modules/compute).
     hcloud = {
       source  = "hetznercloud/hcloud"
-      version = "~> 1.47.0"
+      version = "~> 1.68.0"
     }
     random = {
       source  = "hashicorp/random"
