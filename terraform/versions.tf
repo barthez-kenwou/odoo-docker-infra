@@ -19,7 +19,7 @@ terraform {
     # Only initialized when var.enable_cloud_storage = true (see modules/object_storage).
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.60.0"
+      version = "~> 6.61.0"
     }
     # Only initialized when var.enable_cloud_compute = true (see modules/compute).
     hcloud = {
