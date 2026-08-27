@@ -9,7 +9,7 @@ terraform {
   required_providers {
     docker = {
       source  = "kreuzwerker/docker"
-      version = "~> 3.0.2"
+      version = "~> 4.5.0"
     }
     # Only initialized when var.enable_cloud_dns = true (see modules/dns).
     cloudflare = {
