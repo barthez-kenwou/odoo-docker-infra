@@ -3,7 +3,7 @@
 # The actual config file used at runtime is passed explicitly via
 # `-c config_file=...` in compose so it's easy to see what's active.
 # =============================================================================
-FROM postgres:16.4-alpine3.20
+FROM postgres:17.5-alpine3.20
 
 LABEL org.opencontainers.image.title="odoo-devsecops-lab-postgres" \
       org.opencontainers.image.description="Hardened PostgreSQL for the Odoo lab"
