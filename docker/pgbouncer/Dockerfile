@@ -2,7 +2,7 @@
 # PgBouncer connection pooler, built from Alpine directly (no third-party
 # Docker Hub image) so the full supply chain is auditable from this Dockerfile.
 # =============================================================================
-FROM alpine:3.20.2
+FROM alpine:3.24.1
 
 LABEL org.opencontainers.image.title="odoo-devsecops-lab-pgbouncer" \
       org.opencontainers.image.description="Connection pooler between Odoo and PostgreSQL"
