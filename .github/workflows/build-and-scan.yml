@@ -1,0 +1,151 @@
+name: Build, scan, sign & publish
+
+# "Build once, promote the artifact" (docs/adr/0004): this is the ONLY
+# workflow that ever builds an image. Staging and production both run the
+# exact digest produced here — never a re-build with different flags.
+on:
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write   # required for cosign keyless signing via OIDC
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/odoo-lab
+
+jobs:
+  build-scan-sign:
+    name: Build, scan, SBOM, sign
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [odoo, nginx, postgres, pgbouncer]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve build context/dockerfile per component
+        id: ctx
+        run: |
+          case "${{ matrix.component }}" in
+            odoo)      echo "context=." >> "$GITHUB_OUTPUT"; echo "dockerfile=docker/odoo/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            nginx)     echo "context=docker/nginx" >> "$GITHUB_OUTPUT"; echo "dockerfile=docker/nginx/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            postgres)  echo "context=docker/postgres" >> "$GITHUB_OUTPUT"; echo "dockerfile=docker/postgres/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+            pgbouncer) echo "context=docker/pgbouncer" >> "$GITHUB_OUTPUT"; echo "dockerfile=docker/pgbouncer/Dockerfile" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # --- Build once, load locally for scanning BEFORE it's ever pushed ---
+      - name: Build (local, for pre-push scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.ctx.outputs.context }}
+          file: ${{ steps.ctx.outputs.dockerfile }}
+          push: false
+          load: true
+          tags: local/${{ matrix.component }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Container scanning: fail the pipeline before anything is pushed ---
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: local/${{ matrix.component }}:scan
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+
+      - name: Grype image scan (second opinion, different vuln DB)
+        uses: anchore/scan-action@v4
+        with:
+          image: local/${{ matrix.component }}:scan
+          fail-build: true
+          severity-cutoff: high
+
+      # --- SBOM: generate + attach as a signed attestation ---
+      - name: Generate SBOM (Syft, SPDX format)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: local/${{ matrix.component }}:scan
+          format: spdx-json
+          output-file: sbom-${{ matrix.component }}.spdx.json
+
+      - name: Upload SBOM as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.component }}
+          path: sbom-${{ matrix.component }}.spdx.json
+
+      # --- Only now, having passed every gate above, push for real ---
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/${{ matrix.component }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+
+      - name: Build & push (immutable digest)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.ctx.outputs.context }}
+          file: ${{ steps.ctx.outputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      # --- Keyless signing via GitHub OIDC — no private key to manage/leak ---
+      - name: Sign the image (keyless / Sigstore)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes "${{ env.IMAGE_BASE }}/${{ matrix.component }}@${{ steps.push.outputs.digest }}"
+
+      - name: Attest the SBOM to the same digest
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign attest --yes \
+            --predicate sbom-${{ matrix.component }}.spdx.json \
+            --type spdxjson \
+            "${{ env.IMAGE_BASE }}/${{ matrix.component }}@${{ steps.push.outputs.digest }}"
+
+      - name: Record digest for downstream deploy jobs
+        run: |
+          mkdir -p digests
+          echo "${{ steps.push.outputs.digest }}" > digests/${{ matrix.component }}.digest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}
+          path: digests/${{ matrix.component }}.digest
+
+  trigger-staging-deploy:
+    name: Trigger staging deploy
+    needs: build-scan-sign
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deploy-staging workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: images-ready-for-staging

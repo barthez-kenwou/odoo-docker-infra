@@ -1,0 +1,60 @@
+# =============================================================================
+# Production overrides. Same image digest as the one validated in staging
+# (build-once, promote — see docs/adr/0004 and .github/workflows/promote-production.yml).
+# Tighter resource ceilings are set from real staging load-test numbers
+# (see docs/runbooks/troubleshooting.md sizing notes and tests/load/).
+# =============================================================================
+services:
+  odoo-blue:
+    environment:
+      ODOO_WORKERS: "4"
+      ODOO_MAX_CRON_THREADS: "2"
+      ODOO_LOG_LEVEL: "warn"
+      ODOO_LIST_DB: "False"
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 2g
+        reservations:
+          cpus: "1"
+          memory: 1g
+
+  odoo-green:
+    environment:
+      ODOO_WORKERS: "4"
+      ODOO_MAX_CRON_THREADS: "2"
+      ODOO_LOG_LEVEL: "warn"
+      ODOO_LIST_DB: "False"
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 2g
+        reservations:
+          cpus: "1"
+          memory: 1g
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4g
+        reservations:
+          cpus: "1"
+          memory: 2g
+
+  nginx:
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?production domain, e.g. odoo.example.com, must be set in envs/production.env}
+
+  certbot:
+    image: certbot/certbot:v2.11.0
+    profiles: ["tls"]
+    volumes:
+      - nginx_certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    networks:
+      - private

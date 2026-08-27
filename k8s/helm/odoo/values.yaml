@@ -1,0 +1,75 @@
+# Default (dev-ish) values. Override per environment with
+# values-staging.yaml / values-production.yaml.
+
+image:
+  repository: ghcr.io/example-org/odoo-lab/odoo
+  # Pin by digest in real use; tag left here only for local `helm template` runs.
+  tag: "18.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 8069
+
+ingress:
+  enabled: true
+  className: nginx
+  host: odoo.example.com
+  tlsSecretName: odoo-tls
+  certManagerIssuer: letsencrypt-prod
+  annotations: {}
+
+postgresql:
+  host: postgres-service.odoo.svc.cluster.local
+  port: 6432
+  database: odoo
+  existingSecret: odoo-db-credentials
+
+externalSecret:
+  enabled: false
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  remoteRefKey: "secret/data/odoo-lab/production"
+
+networkPolicy:
+  enabled: true
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+odoo:
+  workers: 4
+  logLevel: info
+  listDb: "False"

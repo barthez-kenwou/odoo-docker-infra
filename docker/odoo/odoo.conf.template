@@ -1,0 +1,50 @@
+; =============================================================================
+; Odoo configuration TEMPLATE — rendered to /tmp/odoo.conf by entrypoint.sh.
+; Never edit a rendered config in place; edit this template and env vars.
+; =============================================================================
+[options]
+; --- Database ---
+db_host = ${ODOO_DB_HOST}
+db_port = ${ODOO_DB_PORT}
+db_user = ${ODOO_DB_USER}
+db_password = ${ODOO_DB_PASSWORD}
+db_name = ${ODOO_DB_NAME}
+; Filter which databases this instance is even allowed to see/serve. Combined
+; with `list_db = False`, this closes the classic Odoo "database manager"
+; information-disclosure/attack surface.
+dbfilter = ^${ODOO_DB_NAME}$
+list_db = ${ODOO_LIST_DB}
+
+; --- Admin / master password (used by DB management screens if ever enabled) ---
+admin_passwd = ${ODOO_ADMIN_PASSWD}
+
+; --- Addons path: core (from the official image) + our custom tree ---
+addons_path = /usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons
+
+; --- Workers / concurrency (see docs/runbooks/troubleshooting.md for sizing) ---
+workers = ${ODOO_WORKERS}
+max_cron_threads = ${ODOO_MAX_CRON_THREADS}
+
+; --- Resource limits per worker: a wedged/leaking worker is recycled instead
+; of taking the whole node down. ---
+limit_memory_soft = ${ODOO_LIMIT_MEMORY_SOFT}
+limit_memory_hard = ${ODOO_LIMIT_MEMORY_HARD}
+limit_time_cpu = ${ODOO_LIMIT_TIME_CPU}
+limit_time_real = ${ODOO_LIMIT_TIME_REAL}
+
+; --- Reverse proxy integration ---
+; proxy_mode trusts X-Forwarded-* headers ONLY from the immediate upstream
+; (nginx, on the private network) — never enable this without a proxy in front.
+proxy_mode = ${ODOO_PROXY_MODE}
+
+; --- Logging ---
+; No `logfile` on purpose: Odoo then logs to stdout, which is what Docker
+; captures and Promtail ships to Loki (see monitoring/promtail). This keeps
+; the container filesystem read-only-friendly and 12-factor-compliant.
+log_level = ${ODOO_LOG_LEVEL}
+log_handler = :INFO
+
+; --- Misc hardening ---
+; Disable the built-in mail gateway cron polling if SMTP is not configured;
+; overridden per-environment where real SMTP creds exist (see envs/*.env).
+without_demo = all

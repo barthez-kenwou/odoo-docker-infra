@@ -1,0 +1,226 @@
+# =============================================================================
+# Observability stack — opt-in via `make up-full` (adds this file on top of
+# the base + environment compose files). Runs on its own compose-managed
+# "monitoring" bridge network: unlike public/private/database, this network
+# isn't a security boundary between application tiers, so it doesn't need
+# Terraform's lifecycle governance (see docs/adr/0002 for the reasoning).
+# Exporters that need to reach an app-tier network are attached to both.
+# =============================================================================
+
+networks:
+  monitoring:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-monitoring
+
+volumes:
+  prometheus_data:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-prometheus-data
+  alertmanager_data:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-alertmanager-data
+  grafana_data:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-grafana-data
+  loki_data:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-loki-data
+  tempo_data:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-tempo-data
+
+x-hardening: &hardening
+  restart: unless-stopped
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  prometheus:
+    <<: *hardening
+    image: prom/prometheus:v2.55.1
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    networks: [monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 512m }
+
+  alertmanager:
+    <<: *hardening
+    build:
+      context: ../monitoring/alertmanager
+    image: odoo-lab/alertmanager:local
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    environment:
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-0}
+    volumes:
+      - alertmanager_data:/alertmanager
+    networks: [monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
+  grafana:
+    <<: *hardening
+    image: grafana/grafana:11.2.0
+    read_only: true
+    tmpfs: ["/tmp:size=32m"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in envs/<env>.env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+    volumes:
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"   # bind to loopback only; put behind SSH tunnel/VPN in staging+prod
+    networks: [monitoring]
+    depends_on: [prometheus, loki]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  node-exporter:
+    <<: *hardening
+    image: prom/node-exporter:v1.8.2
+    pid: host
+    read_only: true
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    networks: [monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
+  cadvisor:
+    <<: *hardening
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true   # cAdvisor needs this to read cgroups/container metrics; isolated on its own network
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks: [monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  postgres-exporter:
+    <<: *hardening
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/${ODOO_DB_NAME}?sslmode=disable"
+      DATA_SOURCE_USER: pg_exporter
+      DATA_SOURCE_PASS: ${PG_EXPORTER_PASSWORD}
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "false"
+    networks:
+      - monitoring
+      - database   # must reach postgres directly; least-privilege role enforced in postgres, not the network
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
+  nginx-exporter:
+    <<: *hardening
+    image: nginx/nginx-prometheus-exporter:1.3.0
+    read_only: true
+    command:
+      - --nginx.scrape-uri=https://nginx/nginx_status
+    networks:
+      - monitoring
+      - private   # must reach nginx's stub_status endpoint
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 64m }
+
+  blackbox-exporter:
+    <<: *hardening
+    image: prom/blackbox-exporter:v0.25.0
+    read_only: true
+    networks:
+      - monitoring
+      - private   # must reach nginx's public health endpoint
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 64m }
+
+  loki:
+    <<: *hardening
+    image: grafana/loki:3.1.1
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - ../monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    networks: [monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  promtail:
+    <<: *hardening
+    image: grafana/promtail:3.1.1
+    volumes:
+      - ../monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log/host:ro
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    networks: [monitoring]
+    depends_on: [loki]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
+  tempo:
+    <<: *hardening
+    image: grafana/tempo:2.6.0
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - ../monitoring/otel/tempo-config.yml:/etc/tempo.yml:ro
+      - tempo_data:/var/tempo
+    command: ["-config.file=/etc/tempo.yml"]
+    networks: [monitoring]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  otel-collector:
+    <<: *hardening
+    image: otel/opentelemetry-collector-contrib:0.109.0
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    volumes:
+      - ../monitoring/otel/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    command: ["--config=/etc/otel-collector-config.yml"]
+    networks: [monitoring, private]
+    depends_on: [tempo]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }

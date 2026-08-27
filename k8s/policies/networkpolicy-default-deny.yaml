@@ -1,0 +1,22 @@
+# =============================================================================
+# Default-deny baseline: applied cluster-wide before any application-specific
+# NetworkPolicy (see k8s/helm/odoo/templates/networkpolicy.yaml), so a
+# namespace that forgets to define its own policy fails closed, not open.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: odoo-staging
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: odoo-production
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]

@@ -1,0 +1,51 @@
+# =============================================================================
+# Staging overrides: as close to production sizing/topology as practical on a
+# single lab VM (checklist item: "Staging aussi proche que possible de
+# production"). Uses a real Let's Encrypt certificate for the staging
+# subdomain (see scripts/tls/issue_cert.sh) and anonymized data only.
+# =============================================================================
+services:
+  odoo-blue:
+    environment:
+      ODOO_WORKERS: "2"
+      ODOO_MAX_CRON_THREADS: "1"
+      ODOO_LOG_LEVEL: "info"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
+
+  odoo-green:
+    environment:
+      ODOO_WORKERS: "2"
+      ODOO_MAX_CRON_THREADS: "1"
+      ODOO_LOG_LEVEL: "info"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+
+  nginx:
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?staging domain, e.g. staging-odoo.example.com, must be set in envs/staging.env}
+
+  # Certbot renews the staging certificate on a timer using the HTTP-01
+  # challenge served by nginx from the shared certbot_webroot volume.
+  certbot:
+    image: certbot/certbot:v2.11.0
+    profiles: ["tls"]
+    volumes:
+      - nginx_certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    networks:
+      - private

@@ -1,0 +1,58 @@
+# --- Secrets & credentials (never commit in clear text) ---
+*.env
+!*.env.example
+envs/*.env
+!envs/*.env.example
+secrets/*.key
+secrets/age.key
+secrets/*.pem
+secrets/*decrypted*
+*.pfx
+*.p12
+terraform/**/*.tfvars
+!terraform/environments/*.tfvars.example
+kubeconfig*
+
+# --- Terraform ---
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# --- Docker / runtime ---
+**/filestore/*
+**/postgres-data/*
+docker-compose.override.yml
+.docker/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# --- Node (k6, tooling) ---
+node_modules/
+
+# --- OS / editor cruft ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Logs & local artifacts ---
+*.log
+/backups/
+/tmp/
+sbom/
+scan-results/

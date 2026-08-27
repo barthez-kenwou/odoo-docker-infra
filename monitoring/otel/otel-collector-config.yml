@@ -1,0 +1,35 @@
+# =============================================================================
+# OpenTelemetry Collector — receives traces (currently emitted only where
+# instrumented; Nginx's $request_id is the join key back to logs/metrics)
+# and forwards them to Tempo. Kept deliberately minimal: this is the
+# integration point for future app-level tracing (e.g. instrumenting the
+# custom Odoo addon with the OpenTelemetry Python SDK), not a finished
+# distributed-tracing rollout.
+# =============================================================================
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]

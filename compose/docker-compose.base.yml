@@ -1,0 +1,236 @@
+# =============================================================================
+# Base stack definition, shared by every environment.
+# Environment-specific files (docker-compose.dev.yml / .staging.yml /
+# .production.yml) layer on top via `docker compose -f base -f <env>` (see
+# the Makefile) to change replica sizing, resource limits, and cert sources
+# WITHOUT changing the topology itself — the same artifact and the same
+# service graph run everywhere (see docs/adr/0002 and docs/adr/0004).
+#
+# Network segmentation (see terraform/modules/network):
+#   public    -> nginx only, host ports published here
+#   private   -> nginx + odoo (app tier)
+#   database  -> odoo + pgbouncer + postgres, internal:true (no egress)
+# =============================================================================
+
+x-odoo-common: &odoo-common
+  build:
+    context: ..
+    dockerfile: docker/odoo/Dockerfile
+  image: ${ODOO_IMAGE:-odoo-lab/odoo:local}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  environment:
+    ODOO_DB_HOST: pgbouncer
+    ODOO_DB_PORT: "6432"
+    ODOO_DB_USER: ${ODOO_DB_USER}
+    ODOO_DB_PASSWORD: ${ODOO_DB_PASSWORD}
+    ODOO_DB_NAME: ${ODOO_DB_NAME}
+    ODOO_ADMIN_PASSWD: ${ODOO_ADMIN_PASSWD}
+    ODOO_WORKERS: ${ODOO_WORKERS:-2}
+    ODOO_MAX_CRON_THREADS: ${ODOO_MAX_CRON_THREADS:-1}
+    ODOO_LIMIT_MEMORY_SOFT: ${ODOO_LIMIT_MEMORY_SOFT:-671088640}
+    ODOO_LIMIT_MEMORY_HARD: ${ODOO_LIMIT_MEMORY_HARD:-805306368}
+    ODOO_LIMIT_TIME_CPU: ${ODOO_LIMIT_TIME_CPU:-60}
+    ODOO_LIMIT_TIME_REAL: ${ODOO_LIMIT_TIME_REAL:-120}
+    ODOO_LIST_DB: ${ODOO_LIST_DB:-False}
+    ODOO_PROXY_MODE: "True"
+    ODOO_LOG_LEVEL: ${ODOO_LOG_LEVEL:-info}
+  volumes:
+    - odoo_filestore:/var/lib/odoo
+  networks:
+    - private
+    - database
+  depends_on:
+    pgbouncer:
+      condition: service_healthy
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — never on the "private" or "public" network, never publishes
+  # a host port. Only reachable from the "database" network.
+  # ---------------------------------------------------------------------------
+  postgres:
+    build:
+      context: ../docker/postgres
+    image: ${POSTGRES_IMAGE:-odoo-lab/postgres:local}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /run/postgresql:size=16m
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
+    security_opt: ["no-new-privileges:true"]
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      ODOO_DB_USER: ${ODOO_DB_USER}
+      ODOO_DB_PASSWORD: ${ODOO_DB_PASSWORD}
+      ODOO_DB_NAME: ${ODOO_DB_NAME}
+      PGBOUNCER_AUTH_PASSWORD: ${PGBOUNCER_AUTH_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_wal_archive:/var/lib/postgresql/wal_archive
+      - pgbouncer_userlist:/pgbouncer-userlist
+    networks:
+      - database
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPU_LIMIT:-2}"
+          memory: ${POSTGRES_MEM_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # PgBouncer — sole client of Postgres; sole path Odoo uses to reach the DB.
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    build:
+      context: ../docker/pgbouncer
+    image: ${PGBOUNCER_IMAGE:-odoo-lab/pgbouncer:local}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ODOO_DB_NAME: ${ODOO_DB_NAME}
+      POSTGRES_HOST: postgres
+    volumes:
+      - pgbouncer_userlist:/pgbouncer-userlist:ro
+    networks:
+      - database
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Odoo — blue/green pair. Only one color receives live traffic at a time
+  # (see docs/adr/0005-blue-green-deployment.md and scripts/deploy/deploy.sh).
+  # Both are defined here so a deploy can warm up the idle color before nginx
+  # is flipped to point at it — zero-downtime, no image rebuild needed to flip.
+  # ---------------------------------------------------------------------------
+  odoo-blue:
+    <<: *odoo-common
+    container_name: ${COMPOSE_PROJECT_NAME:-odoo}-odoo-blue
+    hostname: odoo-blue
+    deploy:
+      resources:
+        limits:
+          cpus: "${ODOO_CPU_LIMIT:-2}"
+          memory: ${ODOO_MEM_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8069/web/login", "-o", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  odoo-green:
+    <<: *odoo-common
+    container_name: ${COMPOSE_PROJECT_NAME:-odoo}-odoo-green
+    hostname: odoo-green
+    profiles: ["green"]   # not started by `make up`; started explicitly by deploy.sh
+    deploy:
+      resources:
+        limits:
+          cpus: "${ODOO_CPU_LIMIT:-2}"
+          memory: ${ODOO_MEM_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8069/web/login", "-o", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Nginx — the only container on the "public" network / with published ports.
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: ../docker/nginx
+    image: ${NGINX_IMAGE:-odoo-lab/nginx:local}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=64m
+      - /tmp:size=16m
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      SERVER_NAME: ${SERVER_NAME}
+      SSL_CERT_PATH: ${SSL_CERT_PATH:-/etc/nginx/certs/fullchain.pem}
+      SSL_KEY_PATH: ${SSL_KEY_PATH:-/etc/nginx/certs/privkey.pem}
+      NGINX_ENVSUBST_TEMPLATE_SUFFIX: ".template"
+      NGINX_ENVSUBST_FILTER: "SERVER_NAME|SSL_CERT_PATH|SSL_KEY_PATH"
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - nginx_certs:/etc/nginx/certs:ro
+      - nginx_active_upstream:/etc/nginx/active
+      - certbot_webroot:/var/www/certbot:ro
+    networks:
+      - public
+      - private
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256m
+    depends_on:
+      odoo-blue:
+        condition: service_healthy
+
+networks:
+  public:
+    name: ${NETWORK_PUBLIC}
+    external: true
+  private:
+    name: ${NETWORK_PRIVATE}
+    external: true
+  database:
+    name: ${NETWORK_DATABASE}
+    external: true
+
+volumes:
+  postgres_data:
+    name: ${VOLUME_POSTGRES_DATA}
+    external: true
+  postgres_wal_archive:
+    name: ${VOLUME_POSTGRES_WAL}
+    external: true
+  odoo_filestore:
+    name: ${VOLUME_ODOO_FILESTORE}
+    external: true
+  pgbouncer_userlist:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-pgbouncer-userlist
+  nginx_certs:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-nginx-certs
+  nginx_active_upstream:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-nginx-active-upstream
+  certbot_webroot:
+    name: ${COMPOSE_PROJECT_NAME:-odoo}-certbot-webroot

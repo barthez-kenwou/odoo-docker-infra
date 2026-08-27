@@ -1,0 +1,20 @@
+groups:
+  - name: http
+    rules:
+      - alert: HighHTTP5xxRate
+        expr: probe_http_status_code{job="blackbox-http"} >= 500
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elevated 5xx rate on {{ $labels.instance }}"
+          description: "Nginx or Odoo is returning server errors on the health probe target."
+
+      - alert: HighRequestLatency
+        expr: probe_duration_seconds{job="blackbox-http"} > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response latency on {{ $labels.instance }}"
+          description: "Health endpoint took more than 2s to respond — check Odoo worker saturation and Postgres slow queries."

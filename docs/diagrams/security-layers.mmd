@@ -1,0 +1,12 @@
+%% Defense in depth — see docs/security/hardening-checklist.md
+graph TD
+    L1["Layer 1 — Network<br/>3 segmented Docker networks, database tier internal=true, UFW host firewall"]
+    L2["Layer 2 — Transport<br/>TLS 1.2/1.3 only, HSTS, cert-manager/certbot auto-renewal"]
+    L3["Layer 3 — Application<br/>Nginx rate limiting, security headers, Odoo ACL/record rules, dbfilter+list_db=False"]
+    L4["Layer 4 — Identity & access<br/>SSH key-only+MFA-capable, RBAC, least-privilege DB roles, no shared admin accounts"]
+    L5["Layer 5 — Supply chain<br/>pinned versions, Trivy/Grype scanning, SBOM, cosign signing+verification before deploy"]
+    L6["Layer 6 — Secrets<br/>SOPS+age encryption at rest, never in Git plaintext, rotated every 90 days"]
+    L7["Layer 7 — Runtime<br/>non-root containers, read-only rootfs, dropped capabilities, seccomp/AppArmor"]
+    L8["Layer 8 — Detection & response<br/>Prometheus/Alertmanager, Loki/auditd/fail2ban, documented incident-response runbook"]
+
+    L1-->L2-->L3-->L4-->L5-->L6-->L7-->L8

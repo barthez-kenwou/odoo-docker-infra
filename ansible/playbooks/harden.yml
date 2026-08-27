@@ -1,0 +1,8 @@
+---
+# Applies the Linux hardening baseline to a target host. Idempotent — safe
+# to re-run any time (e.g. as a scheduled compliance-drift check).
+- name: Harden host
+  hosts: all
+  become: true
+  roles:
+    - hardening

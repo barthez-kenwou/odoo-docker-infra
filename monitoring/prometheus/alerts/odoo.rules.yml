@@ -1,0 +1,35 @@
+groups:
+  - name: odoo
+    rules:
+      - alert: OdooDown
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Odoo health endpoint unreachable"
+          description: "blackbox-exporter could not reach the Odoo login page through Nginx. See docs/runbooks/troubleshooting.md."
+
+      - alert: OdooContainerRestartLoop
+        expr: increase(container_start_time_seconds{name=~".*odoo.*"}[10m]) > 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "Odoo container restarting repeatedly"
+          description: "The active-color Odoo container has restarted more than 3 times in 10 minutes — likely a crash loop. See docs/runbooks/troubleshooting.md."
+
+      - alert: OdooHealthcheckFailing
+        expr: container_last_seen{name=~".*odoo.*"} < time() - 60
+        labels:
+          severity: critical
+        annotations:
+          summary: "Odoo container healthcheck stale"
+          description: "cAdvisor hasn't seen a fresh sample from the Odoo container in 60s."
+
+      - alert: TLSCertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in less than 14 days"
+          description: "certbot's renewal timer should have handled this automatically — check docker compose logs certbot."

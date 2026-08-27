@@ -1,0 +1,77 @@
+name: Deploy to staging
+
+on:
+  repository_dispatch:
+    types: [images-ready-for-staging]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false   # never interrupt a deploy mid-flight
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy (blue/green) to staging
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging-odoo.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Install sops
+        run: |
+          curl -sSLo /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.9.1/sops-v3.9.1.linux.amd64
+          chmod +x /usr/local/bin/sops
+
+      - name: Decrypt staging environment file
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY_STAGING }}
+        run: sops -d envs/staging.env.enc > envs/staging.env
+
+      - name: Verify image signatures before pulling (supply-chain gate)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: ./scripts/security/verify_image.sh staging
+
+      - name: Deploy over SSH (blue/green)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$STAGING_HOST" >> ~/.ssh/known_hosts
+          rsync -az --exclude '.git' ./ "deploy@${STAGING_HOST}:/opt/odoo-lab/"
+          scp envs/staging.env "deploy@${STAGING_HOST}:/opt/odoo-lab/envs/staging.env"
+          ssh "deploy@${STAGING_HOST}" "cd /opt/odoo-lab && ./scripts/deploy/deploy.sh staging"
+
+      - name: Smoke tests
+        run: |
+          BASE_URL=https://staging-odoo.example.com python3 tests/integration/test_health.py
+
+      - name: DAST (OWASP ZAP baseline scan)
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: "https://staging-odoo.example.com"
+          rules_file_name: "tests/security/zap-baseline.conf"
+          cmd_options: "-a"
+
+      - name: Rollback on failure
+        if: failure()
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "deploy@${STAGING_HOST}" "cd /opt/odoo-lab && ./scripts/deploy/rollback.sh staging"
+
+      - name: Cleanup decrypted secrets from the runner
+        if: always()
+        run: shred -u envs/staging.env 2>/dev/null || rm -f envs/staging.env

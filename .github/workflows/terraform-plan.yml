@@ -1,0 +1,51 @@
+name: Terraform plan
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    name: terraform plan (all environments)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, staging, production]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.5"
+
+      - name: terraform init
+        run: terraform -chdir=terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform -chdir=terraform validate
+
+      - name: terraform plan
+        id: plan
+        run: |
+          terraform -chdir=terraform plan \
+            -var-file=environments/${{ matrix.environment }}.tfvars \
+            -no-color -out=/dev/null 2>&1 | tee plan-${{ matrix.environment }}.txt
+
+      - name: Comment plan on the PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan-${{ matrix.environment }}.txt', 'utf8').slice(-60000);
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### Terraform plan — \`${{ matrix.environment }}\`\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`
+            });

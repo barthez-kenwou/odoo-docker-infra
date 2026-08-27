@@ -1,0 +1,204 @@
+---
+# =============================================================================
+# Linux hardening baseline (Ubuntu 24.04 LTS), mapped to CIS Benchmark
+# sections where noted. See docs/security/hardening-checklist.md for the
+# full control -> standard mapping (also covers OWASP ASVS / NIST CSF).
+# =============================================================================
+
+# --- SSH hardening (CIS 5.2.x) ---
+- name: Disable SSH root login
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PermitRootLogin"
+    line: "PermitRootLogin no"
+  notify: restart sshd
+
+- name: Enforce key-only SSH authentication
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication no"
+  notify: restart sshd
+
+- name: Disable empty passwords
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PermitEmptyPasswords"
+    line: "PermitEmptyPasswords no"
+  notify: restart sshd
+
+- name: Limit SSH to protocol 2 and set a login grace time
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - lab hardening"
+    block: |
+      Protocol 2
+      LoginGraceTime 30
+      MaxAuthTries 3
+      X11Forwarding no
+      AllowTcpForwarding no
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+  notify: restart sshd
+
+# --- Firewall (CIS 3.5.x) ---
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Default deny incoming, allow outgoing
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+
+- name: Allow SSH only from the admin CIDR
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+    src: "{{ admin_ipv4_cidr }}"
+
+- name: Allow HTTP/HTTPS from anywhere (Nginx terminates TLS)
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ["80", "443"]
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+    logging: "on"
+
+# --- fail2ban (CIS 5.2 supplement) ---
+- name: Install fail2ban
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+
+- name: Configure the sshd jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    mode: "0644"
+    content: |
+      [sshd]
+      enabled = true
+      port = {{ ssh_port }}
+      bantime = {{ fail2ban_bantime }}
+      findtime = {{ fail2ban_findtime }}
+      maxretry = {{ fail2ban_maxretry }}
+  notify: restart fail2ban
+
+# --- Unattended security updates (CIS 1.9) ---
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: [unattended-upgrades, apt-listchanges]
+    state: present
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades-lab
+    mode: "0644"
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+        "${distro_id}:${distro_codename}-security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "{{ unattended_upgrades_auto_reboot | lower }}";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+- name: Enable the apt periodic timer
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades-lab
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+# --- auditd (CIS 4.1.x) ---
+- name: Install auditd
+  ansible.builtin.apt:
+    name: [auditd, audispd-plugins]
+    state: present
+
+- name: Install a baseline audit ruleset
+  ansible.builtin.copy:
+    dest: /etc/audit/rules.d/lab-baseline.rules
+    mode: "0640"
+    content: |
+      -w /etc/passwd -p wa -k identity
+      -w /etc/group -p wa -k identity
+      -w /etc/shadow -p wa -k identity
+      -w /etc/ssh/sshd_config -p wa -k sshd_config
+      -w /etc/docker/daemon.json -p wa -k docker_config
+      -w /opt/odoo-lab/envs -p wa -k odoo_lab_envs
+      -a always,exit -F arch=b64 -S execve -k exec_log
+  notify: restart auditd
+
+# --- AppArmor (CIS 1.3.x — Ubuntu ships AppArmor by default; just verify) ---
+- name: Ensure AppArmor is installed and enabled
+  ansible.builtin.apt:
+    name: [apparmor, apparmor-utils]
+    state: present
+
+- name: Enable AppArmor service
+  ansible.builtin.systemd:
+    name: apparmor
+    state: started
+    enabled: true
+
+# --- NTP (CIS 2.1.x) ---
+- name: Install and enable chrony for accurate time (audit log integrity)
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+- name: Enable chrony
+  ansible.builtin.systemd:
+    name: chrony
+    state: started
+    enabled: true
+
+# --- Kernel/network hardening (CIS 3.2/3.3) ---
+- name: Apply sysctl network hardening
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop:
+    - { key: "net.ipv4.conf.all.accept_redirects", value: "0" }
+    - { key: "net.ipv4.conf.all.send_redirects", value: "0" }
+    - { key: "net.ipv4.conf.all.accept_source_route", value: "0" }
+    - { key: "net.ipv4.icmp_echo_ignore_broadcasts", value: "1" }
+    - { key: "net.ipv4.tcp_syncookies", value: "1" }
+    - { key: "net.ipv6.conf.all.accept_redirects", value: "0" }
+    - { key: "kernel.randomize_va_space", value: "2" }
+    - { key: "fs.suid_dumpable", value: "0" }
+
+# --- Filesystem permissions (CIS 6.1.x) ---
+- name: Tighten permissions on sensitive files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "0644"
+    owner: root
+    group: root
+  loop:
+    - /etc/passwd
+    - /etc/group
+- name: Tighten permissions on /etc/shadow
+  ansible.builtin.file:
+    path: /etc/shadow
+    mode: "0640"
+    owner: root
+    group: shadow
+
+# --- Remove unneeded packages / services (attack surface reduction) ---
+- name: Remove packages that shouldn't be on a hardened app host
+  ansible.builtin.apt:
+    name: [telnet, rsh-client, talk, nis]
+    state: absent
+    purge: true

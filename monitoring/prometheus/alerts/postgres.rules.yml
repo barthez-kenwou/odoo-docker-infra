@@ -1,0 +1,47 @@
+groups:
+  - name: postgres
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "postgres-exporter cannot reach PostgreSQL. See docs/runbooks/disaster-recovery.md."
+
+      - alert: PostgresTooManyConnections
+        expr: sum(pg_stat_activity_count) by (instance) > 180
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection count is high"
+          description: "Above 180/200 max_connections — check for a connection leak or PgBouncer misconfiguration."
+
+      - alert: PostgresLockWaits
+        expr: pg_locks_count{mode="ExclusiveLock"} > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL exclusive lock contention"
+          description: "More than 5 exclusive locks held for 5+ minutes — a query or migration may be stuck."
+
+      - alert: PostgresReplicationLagHigh
+        expr: pg_replication_lag_seconds > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL replication lag high"
+          description: "Only relevant once a replica is added; kept here so the alert exists before the topology grows."
+
+      - alert: PostgresSlowQueriesIncreasing
+        expr: rate(pg_stat_statements_total_time_seconds[15m]) > 5
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Cumulative query time trending up"
+          description: "Check pg_stat_statements for the top offenders (log_min_duration_statement = 500ms already flags them in logs/Loki)."

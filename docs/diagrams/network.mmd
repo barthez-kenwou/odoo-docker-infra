@@ -1,0 +1,38 @@
+%% Network segmentation — see docs/security/hardening-checklist.md for the CIDR map
+graph LR
+    subgraph "public: 172.28.0.0/24"
+        N1[nginx]
+    end
+    subgraph "private: 172.28.1.0/24"
+        N2[nginx]
+        O1[odoo-blue]
+        O2[odoo-green]
+        NE[nginx-exporter]
+        BE[blackbox-exporter]
+    end
+    subgraph "database: 172.28.2.0/24 (internal=true, no default route)"
+        O3[odoo-blue]
+        O4[odoo-green]
+        PB[pgbouncer]
+        PG[(postgres)]
+        PE[postgres-exporter]
+    end
+    subgraph "monitoring (compose-managed, not a security boundary)"
+        PR[prometheus]
+        GF[grafana]
+        LK[loki]
+    end
+
+    Internet((Internet)) -->|"80/443 only"| N1
+    N1 === N2
+    N2 --> O1
+    N2 --> O2
+    O3 --> PB
+    O4 --> PB
+    PB --> PG
+    PE --> PG
+    PR --> PE
+    PR --> NE
+    PR --> BE
+    GF --> PR
+    GF --> LK

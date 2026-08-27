@@ -1,0 +1,16 @@
+# Default owner for everything not matched below.
+*                           @example-org/platform-team
+
+# Infrastructure changes need infra eyes on them.
+/terraform/                 @example-org/platform-team
+/ansible/                   @example-org/platform-team
+/.github/workflows/         @example-org/platform-team @example-org/security-team
+
+# Security-sensitive surfaces require the security team's review too.
+/policy/                    @example-org/security-team
+/secrets/                   @example-org/security-team
+/docker/postgres/           @example-org/security-team
+/docker/nginx/              @example-org/security-team
+
+# Application code.
+/addons/                    @example-org/odoo-team

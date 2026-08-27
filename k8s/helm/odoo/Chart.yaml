@@ -1,0 +1,9 @@
+apiVersion: v2
+name: odoo
+description: Hardened Odoo Helm chart for the DevSecOps lab's Kubernetes track
+type: application
+version: 1.0.0
+appVersion: "18.0"
+keywords: [odoo, erp, devsecops]
+maintainers:
+  - name: Odoo DevSecOps Lab

@@ -1,0 +1,63 @@
+---
+# One-time bootstrap of a fresh VM: install Docker Engine + the Compose
+# plugin from Docker's official apt repo (pinned versions), then hand off
+# to harden.yml. Run this BEFORE harden.yml on a brand-new host.
+- name: Install Docker Engine
+  hosts: all
+  become: true
+  vars:
+    docker_version: "5:27.2.1-1~ubuntu.24.04~noble"
+  tasks:
+    - name: Install prerequisite packages
+      apt:
+        name: [ca-certificates, curl, gnupg]
+        state: present
+        update_cache: true
+
+    - name: Add Docker's official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add the Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable"
+        state: present
+        filename: docker
+
+    - name: Install Docker Engine + Compose plugin (pinned)
+      apt:
+        name:
+          - "docker-ce={{ docker_version }}"
+          - "docker-ce-cli={{ docker_version }}"
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Add the deploy user to the docker group
+      ansible.builtin.user:
+        name: deploy
+        groups: docker
+        append: true
+
+    - name: Enable rootless-friendly defaults (userns-remap disabled by default; documented tradeoff)
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+        content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": {"max-size": "50m", "max-file": "5"},
+            "no-new-privileges": true,
+            "live-restore": true
+          }
+      notify: restart docker
+
+  handlers:
+    - name: restart docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+        enabled: true

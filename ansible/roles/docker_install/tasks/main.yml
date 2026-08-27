@@ -1,0 +1,5 @@
+---
+# Placeholder role kept for symmetry with the standalone
+# ansible/playbooks/docker-install.yml, in case Docker installation ever
+# needs to be folded into a single combined playbook. Currently
+# docker-install.yml is used directly instead of this role.

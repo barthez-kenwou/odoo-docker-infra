@@ -1,0 +1,58 @@
+name: Scheduled security scan
+
+# Nightly re-scan of whatever is actually running: a package pinned as
+# "no known CVEs" the day it was built can grow one a week later.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  rescan-running-images:
+    name: Re-scan production/staging image digests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [staging, production]
+        component: [odoo, nginx, postgres, pgbouncer]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy scan of the currently deployed digest
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/odoo-lab/${{ matrix.component }}:${{ matrix.environment }}
+          exit-code: "0"   # never fail the nightly job itself — file an issue instead
+          severity: "CRITICAL,HIGH"
+          format: "json"
+          output: "trivy-${{ matrix.environment }}-${{ matrix.component }}.json"
+
+      - name: Open an issue if new CRITICAL/HIGH findings appeared
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('trivy-${{ matrix.environment }}-${{ matrix.component }}.json', 'utf8'));
+            const results = (report.Results || []).flatMap(r => r.Vulnerabilities || []);
+            if (results.length === 0) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[security] ${results.length} CRITICAL/HIGH CVEs in ${{ matrix.environment }}/${{ matrix.component }}`,
+              labels: ["security", "automated"],
+              body: results.slice(0, 25).map(v => `- **${v.VulnerabilityID}** (${v.Severity}) — ${v.PkgName}@${v.InstalledVersion}, fixed in ${v.FixedVersion || "n/a"}`).join("\n"),
+            });
+
+  dependabot-summary:
+    name: Summarize open Dependabot alerts
+    runs-on: ubuntu-latest
+    steps:
+      - name: List open alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api /repos/${{ github.repository }}/dependabot/alerts --jq '.[] | select(.state=="open") | {id, severity: .security_advisory.severity, package: .dependency.package.name}'

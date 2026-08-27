@@ -1,0 +1,11 @@
+# =============================================================================
+# Default server: closes the "no matching Host header" information-disclosure
+# gap. Any request that doesn't match ${SERVER_NAME} exactly is dropped with
+# a connection close instead of being routed to the Odoo backend.
+# =============================================================================
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}

@@ -1,0 +1,26 @@
+%% Build-once, promote pipeline — see docs/adr/0004
+sequenceDiagram
+    participant Dev as Developer
+    participant PR as PR checks
+    participant Build as build-and-scan.yml
+    participant Reg as Registry (signed + SBOM)
+    participant Stg as deploy-staging.yml
+    participant Prod as promote-production.yml
+
+    Dev->>PR: open PR (feature -> develop)
+    PR->>PR: lint, IaC scan, secret scan, SAST, SCA, unit tests
+    PR-->>Dev: required checks green, review approved
+    Dev->>Build: merge to develop
+    Build->>Build: build image (once)
+    Build->>Build: Trivy + Grype scan (gate)
+    Build->>Build: Syft SBOM
+    Build->>Reg: push + cosign sign + attest SBOM
+    Build->>Stg: trigger deploy
+    Stg->>Reg: cosign verify (signature + SBOM)
+    Stg->>Stg: blue/green deploy, migrate, smoke test, DAST (ZAP)
+    Note over Stg: if any gate fails -> automatic rollback
+    Dev->>Prod: workflow_dispatch (staging_run_id)
+    Prod->>Prod: manual approval (GitHub Environment reviewer)
+    Prod->>Reg: cosign verify SAME digest validated in staging
+    Prod->>Prod: pre-deploy backup, blue/green deploy, smoke test
+    Prod->>Prod: git tag release

@@ -1,0 +1,13 @@
+replicaCount: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+ingress:
+  host: staging-odoo.example.com
+  certManagerIssuer: letsencrypt-staging
+externalSecret:
+  enabled: true
+  remoteRefKey: "secret/data/odoo-lab/staging"
+odoo:
+  logLevel: info

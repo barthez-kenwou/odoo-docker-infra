@@ -1,0 +1,26 @@
+# =============================================================================
+# Tempo — single-binary mode, local filesystem backend. Correlated with Loki
+# via the derived field configured in monitoring/grafana/provisioning and
+# with Prometheus via exemplars once app-level metrics exist.
+# =============================================================================
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+compactor:
+  compaction:
+    block_retention: 168h   # 7 days of traces is plenty for a lab

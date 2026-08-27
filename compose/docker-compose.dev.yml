@@ -1,0 +1,55 @@
+# =============================================================================
+# Dev overrides: same topology as staging/production, but cheap to run on a
+# laptop, faster to iterate on, and using a self-signed certificate.
+# =============================================================================
+services:
+  odoo-blue:
+    environment:
+      ODOO_WORKERS: "0"        # 0 = single-process dev mode (auto-reload friendly, verbose tracebacks)
+      ODOO_LOG_LEVEL: "debug"
+      ODOO_LIST_DB: "True"     # convenient locally; NEVER set true in staging/production
+    volumes:
+      # Live-mount custom addons so you don't rebuild the image on every save.
+      - ../addons/custom:/mnt/extra-addons:rw
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512m
+
+  postgres:
+    ports:
+      # Deliberately published ONLY in dev, so you can point a local DBeaver/
+      # psql at it. Never do this in staging/production (see pg_hba.conf and
+      # the "database" network being internal:true, which this would partially
+      # defeat — that's exactly why it's dev-only).
+      - "127.0.0.1:5432:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512m
+
+  nginx:
+    environment:
+      SERVER_NAME: ${SERVER_NAME:-localhost}
+
+  # Local SMTP sandbox: Odoo sends real-looking mail (invoices, notifications,
+  # password resets) here instead of the Internet. Web UI on :8025.
+  # Start with `docker compose --profile mail up -d mailhog`.
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    profiles: ["mail"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - private
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m

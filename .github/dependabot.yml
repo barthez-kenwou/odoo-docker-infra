@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directories:
+      - "/docker/odoo"
+      - "/docker/nginx"
+      - "/docker/postgres"
+      - "/docker/pgbouncer"
+      - "/monitoring/alertmanager"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore"
+
+  - package-ecosystem: "pip"
+    directory: "/docker/odoo"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "python"]
+
+  - package-ecosystem: "terraform"
+    directory: "/terraform"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "terraform"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci"]

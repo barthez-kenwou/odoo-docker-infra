@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: odoo-production
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example-org/odoo-devsecops-lab.git
+    targetRevision: main
+    path: k8s/helm/odoo
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-production.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: odoo-production
+  syncPolicy:
+    # Production sync is deliberately manual: someone reviews the diff and
+    # clicks "Sync" in the Argo CD UI (or `argocd app sync`), mirroring the
+    # manual-approval gate in .github/workflows/promote-production.yml.
+    automated: null
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 2

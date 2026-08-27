@@ -1,0 +1,25 @@
+# =============================================================================
+# Pod Security Standards, enforced at the namespace level (built into
+# Kubernetes since 1.25 — no extra admission controller needed). "restricted"
+# is the strictest built-in profile: no privileged containers, mandatory
+# non-root, mandatory seccomp, no host namespaces/volumes.
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: odoo-staging
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: odoo-production
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

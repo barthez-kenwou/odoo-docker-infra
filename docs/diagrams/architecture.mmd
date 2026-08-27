@@ -1,0 +1,51 @@
+%% Overall 3-tier architecture — see docs/ARCHITECTURE.md
+graph TB
+    subgraph Internet
+        User[("End user browser")]
+        CI["GitHub Actions CI/CD"]
+    end
+
+    subgraph "Public network (tier: public)"
+        Nginx["Nginx reverse proxy<br/>TLS termination, rate limiting,<br/>security headers, blue/green router"]
+    end
+
+    subgraph "Private network (tier: private)"
+        OdooBlue["Odoo (blue)"]
+        OdooGreen["Odoo (green, idle)"]
+    end
+
+    subgraph "Database network (tier: database, internal=true, no egress)"
+        PgBouncer["PgBouncer<br/>session pooling, auth_query"]
+        Postgres[("PostgreSQL<br/>dedicated least-privilege role")]
+    end
+
+    subgraph "Monitoring network"
+        Prometheus["Prometheus"]
+        Grafana["Grafana"]
+        Loki["Loki"]
+        Alertmanager["Alertmanager"]
+    end
+
+    subgraph "Object storage (optional, terraform/modules/object_storage)"
+        S3[("S3 backup bucket<br/>encrypted, versioned, immutable")]
+    end
+
+    User -->|HTTPS 443| Nginx
+    Nginx -->|active upstream| OdooBlue
+    Nginx -.->|idle, warmed during deploy| OdooGreen
+    OdooBlue --> PgBouncer
+    OdooGreen --> PgBouncer
+    PgBouncer --> Postgres
+
+    CI -->|build, scan, sign, push| Registry[("Container registry<br/>Harbor / GHCR")]
+    CI -->|SSH deploy, blue/green flip| Nginx
+    Registry -->|pull validated digest| OdooBlue
+
+    Prometheus -->|scrape| Nginx
+    Prometheus -->|scrape| Postgres
+    Prometheus -->|scrape| OdooBlue
+    Prometheus --> Alertmanager
+    Grafana --> Prometheus
+    Grafana --> Loki
+
+    Postgres -->|restic backup| S3

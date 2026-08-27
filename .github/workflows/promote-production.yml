@@ -1,0 +1,99 @@
+name: Promote to production
+
+# Manual, deliberate trigger only — this workflow NEVER runs automatically.
+# It promotes the exact image digests already built, scanned, signed, and
+# validated in staging (docs/adr/0004) — it does not rebuild anything.
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id:
+        description: "Run ID of the build-and-scan.yml run whose digests passed staging validation"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote validated digests to production
+    runs-on: ubuntu-latest
+    # GitHub Environments "production" is configured with required reviewers
+    # in repo settings (see docs/security/hardening-checklist.md) — this job
+    # will not proceed until someone with the "production-approver" role
+    # clicks Approve.
+    environment:
+      name: production
+      url: https://odoo.example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the exact digests validated in staging
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          run-id: ${{ inputs.staging_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Install sops
+        run: |
+          curl -sSLo /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.9.1/sops-v3.9.1.linux.amd64
+          chmod +x /usr/local/bin/sops
+
+      - name: Decrypt production environment file
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY_PRODUCTION }}
+        run: sops -d envs/production.env.enc > envs/production.env
+
+      - name: Re-verify signature + SBOM attestation of every digest
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: ./scripts/security/verify_image.sh production
+
+      - name: Pin production.env to the promoted digests
+        run: ./scripts/deploy/promote_image.sh
+
+      - name: Pre-deployment backup (safety net before any migration runs)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$PRODUCTION_HOST" >> ~/.ssh/known_hosts
+          ssh "deploy@${PRODUCTION_HOST}" "cd /opt/odoo-lab && make backup ENV=production"
+
+      - name: Deploy over SSH (blue/green)
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+        run: |
+          rsync -az --exclude '.git' ./ "deploy@${PRODUCTION_HOST}:/opt/odoo-lab/"
+          scp envs/production.env "deploy@${PRODUCTION_HOST}:/opt/odoo-lab/envs/production.env"
+          ssh "deploy@${PRODUCTION_HOST}" "cd /opt/odoo-lab && ./scripts/deploy/deploy.sh production"
+
+      - name: Post-deployment smoke tests
+        run: BASE_URL=https://odoo.example.com python3 tests/integration/test_health.py
+
+      - name: Automatic rollback on failure
+        if: failure()
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+        run: ssh "deploy@${PRODUCTION_HOST}" "cd /opt/odoo-lab && ./scripts/deploy/rollback.sh production"
+
+      - name: Tag the release
+        if: success()
+        run: |
+          git config user.name "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          TAG="v$(date +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"
+          git tag -a "$TAG" -m "Production release ${TAG}, promoted from staging run ${{ inputs.staging_run_id }}"
+          git push origin "$TAG"
+
+      - name: Cleanup decrypted secrets from the runner
+        if: always()
+        run: shred -u envs/production.env 2>/dev/null || rm -f envs/production.env

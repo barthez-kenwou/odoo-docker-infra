@@ -1,0 +1,69 @@
+# =============================================================================
+# Prometheus scrape configuration.
+# =============================================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  # NOTE: Prometheus' YAML config does not expand environment variables, and
+  # each environment (dev/staging/production) already runs its own fully
+  # separate monitoring stack (own compose project, own volumes) — so a
+  # dynamic label here would add little. If you centralize into one
+  # cross-environment Prometheus/Thanos later, set this per deployment via
+  # `promtool`/config-templating at that point.
+  external_labels:
+    environment: lab
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Host-level metrics (CPU/RAM/disk/network — RED/USE golden signals)
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Per-container resource usage
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # PostgreSQL: connections, locks, replication lag, table/index bloat
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # Nginx stub_status (requests, active connections) — see nginx-exporter
+  - job_name: nginx
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+
+  # Blackbox HTTP probes: Odoo has no native /metrics endpoint (Community
+  # edition), so uptime/TLS-expiry/latency are measured via synthetic HTTP
+  # checks against the public health endpoint instead.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://nginx/healthz
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]

@@ -1,0 +1,14 @@
+# Checkov configuration — run as: checkov -c terraform/policy/checkov.yaml -d terraform/
+framework:
+  - terraform
+compact: true
+quiet: false
+download-external-modules: false
+skip-check:
+  # CKV_AWS_18 (S3 access logging) — deliberately out of scope for a lab
+  # backup bucket; revisit if this bucket ever holds more than backups.
+  - CKV_AWS_18
+soft-fail-on:
+  # These are genuinely nice-to-have, not release-blocking, for a solo lab.
+  - CKV_AWS_144 # S3 cross-region replication
+output: cli

@@ -1,0 +1,41 @@
+; =============================================================================
+; PgBouncer configuration TEMPLATE.
+; =============================================================================
+[databases]
+${ODOO_DB_NAME} = host=${POSTGRES_HOST} port=5432 dbname=${ODOO_DB_NAME}
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 6432
+unix_socket_dir =
+
+; Odoo relies on PostgreSQL LISTEN/NOTIFY for its real-time "bus" (chat,
+; longpolling notifications), which requires a persistent session — hence
+; `session` pooling, NOT the more memory-efficient `transaction` mode that
+; most PgBouncer+web-app guides default to.
+pool_mode = session
+max_client_conn = 500
+default_pool_size = 50
+min_pool_size = 5
+reserve_pool_size = 10
+reserve_pool_timeout = 5
+server_idle_timeout = 600
+
+; --- Auth: auth_query against Postgres, see docker/postgres/init/02-*.sh ---
+auth_type = scram-sha-256
+auth_file = /pgbouncer-userlist/userlist.txt
+auth_user = pgbouncer_auth
+auth_query = SELECT * FROM pgbouncer.user_lookup($1)
+
+server_reset_query = DISCARD ALL
+ignore_startup_parameters = extra_float_digits
+
+admin_users = pgbouncer_auth
+stats_users = pgbouncer_auth
+
+; Log to stdout/stderr so Promtail picks it up like every other container.
+logfile =
+pidfile =
+log_connections = 1
+log_disconnections = 1
+log_pooler_errors = 1

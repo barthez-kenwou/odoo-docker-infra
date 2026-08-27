@@ -1,0 +1,97 @@
+# =============================================================================
+# Odoo virtual host TEMPLATE.
+# Rendered at container start by the official Nginx envsubst entrypoint;
+# ${SERVER_NAME} / ${SSL_CERT_PATH} / ${SSL_KEY_PATH} come from the
+# environment (see envs/*.env and NGINX_ENVSUBST_FILTER in compose files).
+# =============================================================================
+
+# --- HTTP: redirect everything to HTTPS, except the ACME HTTP-01 challenge
+# path used by certbot for Let's Encrypt renewal. ---
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${SERVER_NAME};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# --- HTTPS: the real Odoo virtual host ---
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate     ${SSL_CERT_PATH};
+    ssl_certificate_key ${SSL_KEY_PATH};
+    include /etc/nginx/snippets/ssl-params.conf;
+    include /etc/nginx/snippets/security-headers.conf;
+
+    client_body_buffer_size 128k;
+    proxy_read_timeout 720s;
+    proxy_connect_timeout 720s;
+    proxy_send_timeout 720s;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Request-Id $request_id_final;
+
+    # Unauthenticated health endpoint for the container HEALTHCHECK, the
+    # Docker/Kubernetes liveness/readiness probes, and the blackbox exporter.
+    # Never proxied to Odoo — answered directly by Nginx.
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Scraped by nginx-exporter (monitoring/docker-compose.monitoring.yml).
+    # Restricted to the "private" network subnet — never reachable from
+    # "public". See docs/security/hardening-checklist.md for the subnet map.
+    location = /nginx_status {
+        stub_status;
+        allow 172.28.1.0/24;
+        deny all;
+        access_log off;
+    }
+
+    # Stricter rate limit on the authentication endpoint.
+    location /web/login {
+        limit_req zone=login_zone burst=5 nodelay;
+        limit_conn conn_zone 10;
+        proxy_pass http://odoo_active;
+    }
+
+    # Longpolling / websocket (Odoo's bus/notification channel) needs the
+    # Upgrade/Connection headers and a much longer read timeout.
+    location /longpolling {
+        proxy_pass http://odoo_active;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+
+    location / {
+        limit_req zone=general_zone burst=20 nodelay;
+        limit_conn conn_zone 20;
+        proxy_pass http://odoo_active;
+    }
+
+    # Never let path traversal reach the app for these sensitive Odoo
+    # management endpoints unless explicitly required.
+    location ~ ^/web/database/(manager|selector) {
+        # Blocked by default; flip to `proxy_pass http://odoo_active;` only
+        # for a short, deliberate maintenance window, and re-enable the block
+        # immediately after (tracked in docs/runbooks/troubleshooting.md).
+        return 403;
+    }
+}

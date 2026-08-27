@@ -1,0 +1,201 @@
+name: PR checks
+
+# Runs on every pull request into develop or main. This is the required-checks
+# gate referenced in docs/security/hardening-checklist.md's branch protection
+# rules: nothing merges if any job here fails.
+on:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static analysis: formatting/linting for every language in the repo.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint (shell/Dockerfile/Terraform/YAML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: "./scripts"
+          severity: warning
+
+      - name: Hadolint (Dockerfiles)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/odoo/Dockerfile
+          failure-threshold: warning
+
+      - name: Hadolint (nginx)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/nginx/Dockerfile
+          failure-threshold: warning
+
+      - name: Hadolint (postgres)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/postgres/Dockerfile
+          failure-threshold: warning
+
+      - name: yamllint
+        run: |
+          pip install --user yamllint==1.35.1
+          ~/.local/bin/yamllint -d "{extends: default, rules: {line-length: disable}}" compose/ monitoring/ .github/workflows/
+
+      - name: Terraform fmt check
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.5"
+      - run: terraform -chdir=terraform fmt -check -recursive
+
+  # ---------------------------------------------------------------------------
+  # IaC scanning: tflint + checkov + Trivy config scan.
+  # ---------------------------------------------------------------------------
+  iac-scan:
+    name: IaC security scan (Terraform + Compose)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.5"
+
+      - name: terraform validate
+        run: |
+          cd terraform
+          terraform init -backend=false
+          terraform validate
+
+      - name: TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.53.0
+      - run: |
+          cd terraform
+          tflint --init
+          tflint --config=.tflint.hcl -f compact
+
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform/
+          config_file: terraform/policy/checkov.yaml
+          quiet: true
+
+      - name: Trivy IaC/config scan (Dockerfiles + Compose)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: .
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+
+      - name: Conftest — Policy as Code (Compose + Dockerfiles)
+        run: |
+          curl -sSL https://github.com/open-policy-agent/conftest/releases/download/v0.55.0/conftest_0.55.0_Linux_x86_64.tar.gz | tar xz conftest
+          sudo mv conftest /usr/local/bin/
+          conftest test --policy policy/opa/compose.rego compose/*.yml
+          conftest test --policy policy/opa/dockerfile.rego docker/odoo/Dockerfile docker/nginx/Dockerfile docker/postgres/Dockerfile docker/pgbouncer/Dockerfile
+
+  # ---------------------------------------------------------------------------
+  # Secret scanning: fails the build the instant a credential-shaped string
+  # is committed, including in the diff's history for this PR.
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    name: Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # SAST: Semgrep against the custom Odoo addon's Python code.
+  # ---------------------------------------------------------------------------
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep:1.86.0
+    steps:
+      - uses: actions/checkout@v4
+      - run: semgrep ci --config=auto --error addons/custom/
+
+  # ---------------------------------------------------------------------------
+  # SCA: dependency vulnerability + license scanning for the addon's extra
+  # Python dependencies.
+  # ---------------------------------------------------------------------------
+  sca:
+    name: Dependency scan (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          pip install pip-audit==2.7.3
+          pip-audit -r docker/odoo/requirements.txt
+
+  # ---------------------------------------------------------------------------
+  # Unit tests for the custom addon, run inside a throwaway Odoo+Postgres pair.
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Odoo addon unit tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine3.20
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: odoo_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U odoo" --health-interval 5s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run addon tests inside the official Odoo image
+        run: |
+          docker run --rm --network=host \
+            -v "${{ github.workspace }}/addons/custom:/mnt/extra-addons" \
+            -e HOST=127.0.0.1 -e USER=odoo -e PASSWORD=odoo \
+            odoo:18.0 \
+            odoo -d odoo_test --db_host=127.0.0.1 --db_user=odoo --db_password=odoo \
+              --addons-path=/usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons \
+              --test-enable --stop-after-init -i lab_demo_module
+
+  # ---------------------------------------------------------------------------
+  # Build (no push) — proves the image still builds; the real scan/sign/push
+  # happens in build-and-scan.yml on merge to develop/main.
+  # ---------------------------------------------------------------------------
+  build-check:
+    name: Docker build check (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build odoo image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/odoo/Dockerfile
+          push: false
+          tags: odoo-lab/odoo:pr-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
