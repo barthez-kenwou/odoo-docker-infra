@@ -21,7 +21,7 @@
 # relative to the repo root.
 
 # ---- Stage 1: build wheels for custom addon Python dependencies ----
-FROM python:3.11.9-slim-bookworm AS wheels
+FROM python:3.14.6-slim-bookworm AS wheels
 WORKDIR /wheels
 COPY docker/odoo/requirements.txt .
 RUN apt-get update \
