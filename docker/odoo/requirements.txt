@@ -2,4 +2,4 @@
 # Keep this pinned to exact versions (== not >=) for reproducible builds.
 # The base odoo:18.0 image already ships everything Odoo core needs.
 qrcode==7.4.2
-phonenumbers==8.13.42
+phonenumbers==9.0.39
